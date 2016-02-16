@@ -20,6 +20,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+//! 
+//! Command line program that can be sandwiched between pipes to effectively increase
+//! the size of the pipe buffer.  Since linux pipes are generally limited to `64k` it
+//! is sometimes useful to provide significantly more buffering between programs in a
+//! pipe in order to smooth out any "lumpiness" in the flow of data.
+//! 
+
 mod ringbuffer;
 
 use std::env;
@@ -29,11 +36,10 @@ use std::sync::{Arc, Mutex, Condvar};
 use std::thread;
 use ringbuffer::RingBuffer;
 
-////////////////////////////////////////////////////////////////////////////////
-// Main program that uses a pair of threads to move data from Stdin to Stdout
-// with a RungBuffer in the middle.
-////////////////////////////////////////////////////////////////////////////////
-fn main() {
+
+/// Main program that uses a pair of threads to move data from Stdin to Stdout
+/// with a RungBuffer in the middle.
+pub fn main() {
     // Grab the arguments array
     let args: Vec<String> = env::args().collect();
     if args.len() != 2 { usage_and_exit("No buffer_size supplied.") }
