@@ -40,6 +40,9 @@ use clap::{Arg, App};
 use ringbuffer::RingBuffer;
 use regex::Regex;
 
+// How big should the thread-local buffers for the reader and writer threads be
+const THREAD_BUFFER_SIZE: usize = 1024 * 64;
+
 /// Main function that coordinates argument parsing and then delegates to the
 /// `run()` function to do the actual work.
 pub fn main() {
@@ -98,7 +101,7 @@ fn run(buffer_size: usize) {
         let ring = ring.clone();
         let cond = cond.clone();
         thread::spawn(move || {
-            let mut bytes: [u8; 32000] = [0; 32000];
+            let mut bytes: [u8; THREAD_BUFFER_SIZE] = [0; THREAD_BUFFER_SIZE];
             let mut output = io::stdout();
             'main_loop : loop {
                 let n = {
@@ -125,7 +128,7 @@ fn run(buffer_size: usize) {
     };
 
     // Setup this thread as the reader thread
-    let mut bytes: [u8; 32000] = [0; 32000];
+    let mut bytes: [u8; THREAD_BUFFER_SIZE] = [0; THREAD_BUFFER_SIZE];
     let mut input = io::stdin();
     loop {
         let n = input.read(&mut bytes).unwrap();
