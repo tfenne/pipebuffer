@@ -73,18 +73,18 @@ pub fn main() {
 /// either upper or lower case. If the value can be parsed returns a 
 /// `Some(bytes)`, otherwise returns a None.
 fn parse_memory(s: &str) -> Option<usize> {
-    match Regex::new("^([0-9]+)([kmgp])b?").unwrap().captures(&s.to_lowercase()) {
+    match Regex::new("^([0-9]+)([kmgp])?b?$").unwrap().captures(&s.to_lowercase()) {
         None => None,
         Some(groups) => {
-            let num : usize = groups.at(1).unwrap().parse().unwrap();
+            let num : Option<usize> = groups.at(1).unwrap().parse().ok();
             let exp = match groups.at(2) {
                 Some("k") => 1,
                 Some("m") => 2,
                 Some("g") => 3,
                 Some("p") => 4,
-                _         => panic!("Unreachable")
+                _         => 0
             };
-            Some(num * (1024 as usize).pow(exp))
+            num.map(|n| n * (1024 as usize).pow(exp))
         }
     }
 }
@@ -154,4 +154,49 @@ fn run(buffer_size: usize) {
     
     writeln!(&mut io::stderr(), "Attempting to join on the writer.").unwrap();
     writer_handle.join().unwrap();
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Tests only beyond this point
+////////////////////////////////////////////////////////////////////////////////
+
+#[test]
+fn test_parse_mem_bytes() -> () {
+    assert!(parse_memory("1") == Some::<usize>(1));
+    assert!(parse_memory("1024") == Some::<usize>(1024));
+    assert!(parse_memory("1000000000") == Some::<usize>(1000000000));
+    assert!(parse_memory("10000000000000000000000000000") == None);
+}
+
+#[test]
+fn test_parse_mem_suffixed() -> () {
+    assert!(parse_memory("1k")      == Some::<usize>(1024));
+    assert!(parse_memory("99k")     == Some::<usize>(99 * 1024));
+    assert!(parse_memory("99kb")    == Some::<usize>(99 * 1024));
+    assert!(parse_memory("99K")     == Some::<usize>(99 * 1024));
+    assert!(parse_memory("99KB")    == Some::<usize>(99 * 1024));
+
+    assert!(parse_memory("1m")      == Some::<usize>(1024*1024));
+    assert!(parse_memory("10m")     == Some::<usize>(10*1024*1024));
+    assert!(parse_memory("101m")    == Some::<usize>(101*1024*1024));
+    assert!(parse_memory("1024m")   == Some::<usize>(1024*1024*1024));
+    
+    assert!(parse_memory("6g")      == Some::<usize>(6*1024*1024*1024));
+    assert!(parse_memory("60g")     == Some::<usize>(60*1024*1024*1024));
+    
+    assert!(parse_memory("1p")     == Some::<usize>(1024*1024*1024*1024));    
+}
+
+#[test]
+fn test_parse_mem_fails() -> () {
+    assert!(parse_memory("") == None);
+    assert!(parse_memory("k") == None);
+    assert!(parse_memory("kb") == None);
+    assert!(parse_memory("foo") == None);
+    assert!(parse_memory("not1024m") == None);
+    assert!(parse_memory("-12g") == None);
+    assert!(parse_memory("12x") == None);
+    assert!(parse_memory("7y") == None);
+    assert!(parse_memory("1024x1024") == None);
+    assert!(parse_memory("1024mi") == None);
 }
