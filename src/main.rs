@@ -100,23 +100,26 @@ fn run(buffer_size: usize) {
         thread::spawn(move || {
             let mut bytes: [u8; 32000] = [0; 32000];
             let mut output = io::stdout();
-            loop {
-                // writeln!(&mut io::stderr(), "In stdout writing loop.").unwrap();
-                let mut buffer = ring.lock().unwrap();
-                while buffer.is_empty()  && !buffer.is_closed() {
-                    buffer = cond.wait(buffer).unwrap();
-                }
-                
-                let n = buffer.get(&mut bytes);
-                if n > 0 {
-                    let mut start = 0;
-                    while start < n { start += output.write(&bytes[start..n]).unwrap(); }
-                    output.flush().unwrap();
-                    cond.notify_one();
-                }
-                else if buffer.is_empty() && buffer.is_closed() {
-                    break;
-                }
+            'main_loop : loop {
+                let n = {
+                    // Lock the buffer, but wait on it if it's empty
+                    let mut buffer = ring.lock().unwrap();
+                    while buffer.is_empty() {
+                        if buffer.is_closed() { break 'main_loop; }
+                        else { buffer = cond.wait(buffer).unwrap(); }
+                    }
+
+                    // Fetch from the buffer, and notify writers if we went from full to not full
+                    let was_full = buffer.is_full();
+                    let n = buffer.get(&mut bytes);
+                    if was_full && n > 0 { cond.notify_one(); }
+                    n
+                }; // lock released here
+
+                // Write the data, if any, to stdout
+                let mut start = 0;
+                while start < n { start += output.write(&bytes[start..n]).unwrap(); }
+                output.flush().unwrap();
             }
         })
     };
@@ -125,12 +128,10 @@ fn run(buffer_size: usize) {
     let mut bytes: [u8; 32000] = [0; 32000];
     let mut input = io::stdin();
     loop {
-        // writeln!(&mut io::stderr(), "In stdin reading loop.").unwrap();
-        let mut buffer = ring.lock().unwrap();
         let n = input.read(&mut bytes).unwrap();
+        let mut buffer = ring.lock().unwrap();
         
         if n == 0 { // input stream is closed
-            // writeln!(&mut io::stderr(), "Stdin is closed.").unwrap();
             buffer.close();
             cond.notify_one();
             break; 
@@ -138,13 +139,13 @@ fn run(buffer_size: usize) {
         else {
             let mut start = 0;
             while start < n {
-                if buffer.is_full() {
+                while buffer.is_full() {
                     buffer = cond.wait(buffer).unwrap();
                 }
+                let was_empty = buffer.is_empty();
                 start += buffer.put(&bytes[start..n]);
-                cond.notify_one();
+                if was_empty { cond.notify_one(); }
              }
-             // writeln!(&mut io::stderr(), "Put {} bytes into the buffer and unparking the writer.", n).unwrap();
         }
     }
     
