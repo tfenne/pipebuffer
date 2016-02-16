@@ -29,27 +29,66 @@
 
 mod ringbuffer;
 
-use std::env;
+#[macro_use] extern crate clap;
+extern crate regex;
+
 use std::io;
 use std::io::{Read,Write};
 use std::sync::{Arc, Mutex, Condvar};
 use std::thread;
+use clap::{Arg, App};
 use ringbuffer::RingBuffer;
+use regex::Regex;
 
-
-/// Main program that uses a pair of threads to move data from Stdin to Stdout
-/// with a RungBuffer in the middle.
+/// Main function that coordinates argument parsing and then delegates to the
+/// `run()` function to do the actual work.
 pub fn main() {
-    // Grab the arguments array
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 2 { usage_and_exit("No buffer_size supplied.") }
-    
+    let matches =
+        App::new("pipebuffer")
+            .version(crate_version!())
+            .about("A tool to rapidly buffer and re-emit data in unix pipelines.")
+            .arg(Arg::with_name("size")
+                     .short("s").long("size")
+                     .help("The size, in bytes or with k[b]/m[b]/g[b] suffix.")
+                     .default_value("256m"))
+            .get_matches();
 
-    let buffer_size : usize = match args[1].parse() {
-        Ok(n)  => n,
-        Err(_) => usage_and_exit("Non-numeric buffer_size.")
+    let buffer_size = match parse_memory(matches.value_of("size").unwrap()) {
+        Some(size) => size,
+        None       => {
+            println!("{}", matches.usage());
+            println!("Error: Argument {} is not a valid size.", matches.value_of("size").unwrap());
+            std::process::exit(1)
+        }
     };
-    
+
+    run(buffer_size);
+}
+
+/// Parses memory unit values from strings. Specifically accepts any value
+/// that is an integer number followed optionally by `k/kb/m/mb/g/gb/p/pb` in
+/// either upper or lower case. If the value can be parsed returns a 
+/// `Some(bytes)`, otherwise returns a None.
+fn parse_memory(s: &str) -> Option<usize> {
+    match Regex::new("^([0-9]+)([kmgp])b?").unwrap().captures(&s.to_lowercase()) {
+        None => None,
+        Some(groups) => {
+            let num : usize = groups.at(1).unwrap().parse().unwrap();
+            let exp = match groups.at(2) {
+                Some("k") => 1,
+                Some("m") => 2,
+                Some("g") => 3,
+                Some("p") => 4,
+                _         => panic!("Unreachable")
+            };
+            Some(num * (1024 as usize).pow(exp))
+        }
+    }
+}
+
+/// Funtion that uses a pair of threads to move data from Stdin to Stdout
+/// with a RungBuffer in the middle.
+fn run(buffer_size: usize) {
     // The shared ring buffer and the thread handles
     let ring = Arc::new(Mutex::new(RingBuffer::new(buffer_size)));
     let cond = Arc::new(Condvar::new());
@@ -111,12 +150,4 @@ pub fn main() {
     
     writeln!(&mut io::stderr(), "Attempting to join on the writer.").unwrap();
     writer_handle.join().unwrap();
-}
-
-// Prints the usage and then exits with error code 1
-fn usage_and_exit(msg: &str) -> ! {
-    let name = env::args().next().expect("no args[0]!");
-    println!("Usage: {} buffer_size", name);
-    println!("Error: {}", msg);
-    std::process::exit(1)    
 }
