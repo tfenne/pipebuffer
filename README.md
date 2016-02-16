@@ -1,3 +1,7 @@
+[![License](http://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Language](http://img.shields.io/badge/language-rust-brightgreen.svg)](http://www.rust-lang.org/)
+
+
 # pipebuffer
 
 A simple command line program for buffering `stdin`/`stdout` between piped processes when the operating system's pipe buffer is insufficient.  Modern linux limits the buffer between pipes in a pipeline to `64kb`, which can cause bottlenecks when working with processes with "lumpy" IO profiles.
