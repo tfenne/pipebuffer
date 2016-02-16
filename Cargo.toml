@@ -2,3 +2,7 @@
 name = "pipebuffer"
 version = "0.0.1"
 authors = [ "Tim Fennell <tfenne@tfenne.com>" ]
+
+[dependencies]
+clap = "2"
+regex = "*"
