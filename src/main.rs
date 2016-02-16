@@ -40,6 +40,9 @@ use clap::{Arg, App};
 use ringbuffer::RingBuffer;
 use regex::Regex;
 
+// How big should the thread-local buffers for the reader and writer threads be
+const THREAD_BUFFER_SIZE: usize = 1024 * 64;
+
 /// Main function that coordinates argument parsing and then delegates to the
 /// `run()` function to do the actual work.
 pub fn main() {
@@ -70,18 +73,18 @@ pub fn main() {
 /// either upper or lower case. If the value can be parsed returns a 
 /// `Some(bytes)`, otherwise returns a None.
 fn parse_memory(s: &str) -> Option<usize> {
-    match Regex::new("^([0-9]+)([kmgp])b?").unwrap().captures(&s.to_lowercase()) {
+    match Regex::new("^([0-9]+)([kmgp])?b?$").unwrap().captures(&s.to_lowercase()) {
         None => None,
         Some(groups) => {
-            let num : usize = groups.at(1).unwrap().parse().unwrap();
+            let num : Option<usize> = groups.at(1).unwrap().parse().ok();
             let exp = match groups.at(2) {
                 Some("k") => 1,
                 Some("m") => 2,
                 Some("g") => 3,
                 Some("p") => 4,
-                _         => panic!("Unreachable")
+                _         => 0
             };
-            Some(num * (1024 as usize).pow(exp))
+            num.map(|n| n * (1024 as usize).pow(exp))
         }
     }
 }
@@ -98,39 +101,40 @@ fn run(buffer_size: usize) {
         let ring = ring.clone();
         let cond = cond.clone();
         thread::spawn(move || {
-            let mut bytes: [u8; 32000] = [0; 32000];
+            let mut bytes: [u8; THREAD_BUFFER_SIZE] = [0; THREAD_BUFFER_SIZE];
             let mut output = io::stdout();
-            loop {
-                // writeln!(&mut io::stderr(), "In stdout writing loop.").unwrap();
-                let mut buffer = ring.lock().unwrap();
-                while buffer.is_empty()  && !buffer.is_closed() {
-                    buffer = cond.wait(buffer).unwrap();
-                }
-                
-                let n = buffer.get(&mut bytes);
-                if n > 0 {
-                    let mut start = 0;
-                    while start < n { start += output.write(&bytes[start..n]).unwrap(); }
-                    output.flush().unwrap();
-                    cond.notify_one();
-                }
-                else if buffer.is_empty() && buffer.is_closed() {
-                    break;
-                }
+            'main_loop : loop {
+                let n = {
+                    // Lock the buffer, but wait on it if it's empty
+                    let mut buffer = ring.lock().unwrap();
+                    while buffer.is_empty() {
+                        if buffer.is_closed() { break 'main_loop; }
+                        else { buffer = cond.wait(buffer).unwrap(); }
+                    }
+
+                    // Fetch from the buffer, and notify writers if we went from full to not full
+                    let was_full = buffer.is_full();
+                    let n = buffer.get(&mut bytes);
+                    if was_full && n > 0 { cond.notify_one(); }
+                    n
+                }; // lock released here
+
+                // Write the data, if any, to stdout
+                let mut start = 0;
+                while start < n { start += output.write(&bytes[start..n]).unwrap(); }
+                output.flush().unwrap();
             }
         })
     };
 
     // Setup this thread as the reader thread
-    let mut bytes: [u8; 32000] = [0; 32000];
+    let mut bytes: [u8; THREAD_BUFFER_SIZE] = [0; THREAD_BUFFER_SIZE];
     let mut input = io::stdin();
     loop {
-        // writeln!(&mut io::stderr(), "In stdin reading loop.").unwrap();
-        let mut buffer = ring.lock().unwrap();
         let n = input.read(&mut bytes).unwrap();
+        let mut buffer = ring.lock().unwrap();
         
         if n == 0 { // input stream is closed
-            // writeln!(&mut io::stderr(), "Stdin is closed.").unwrap();
             buffer.close();
             cond.notify_one();
             break; 
@@ -138,16 +142,61 @@ fn run(buffer_size: usize) {
         else {
             let mut start = 0;
             while start < n {
-                if buffer.is_full() {
+                while buffer.is_full() {
                     buffer = cond.wait(buffer).unwrap();
                 }
+                let was_empty = buffer.is_empty();
                 start += buffer.put(&bytes[start..n]);
-                cond.notify_one();
+                if was_empty { cond.notify_one(); }
              }
-             // writeln!(&mut io::stderr(), "Put {} bytes into the buffer and unparking the writer.", n).unwrap();
         }
     }
     
     writeln!(&mut io::stderr(), "Attempting to join on the writer.").unwrap();
     writer_handle.join().unwrap();
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Tests only beyond this point
+////////////////////////////////////////////////////////////////////////////////
+
+#[test]
+fn test_parse_mem_bytes() -> () {
+    assert!(parse_memory("1") == Some::<usize>(1));
+    assert!(parse_memory("1024") == Some::<usize>(1024));
+    assert!(parse_memory("1000000000") == Some::<usize>(1000000000));
+    assert!(parse_memory("10000000000000000000000000000") == None);
+}
+
+#[test]
+fn test_parse_mem_suffixed() -> () {
+    assert!(parse_memory("1k")      == Some::<usize>(1024));
+    assert!(parse_memory("99k")     == Some::<usize>(99 * 1024));
+    assert!(parse_memory("99kb")    == Some::<usize>(99 * 1024));
+    assert!(parse_memory("99K")     == Some::<usize>(99 * 1024));
+    assert!(parse_memory("99KB")    == Some::<usize>(99 * 1024));
+
+    assert!(parse_memory("1m")      == Some::<usize>(1024*1024));
+    assert!(parse_memory("10m")     == Some::<usize>(10*1024*1024));
+    assert!(parse_memory("101m")    == Some::<usize>(101*1024*1024));
+    assert!(parse_memory("1024m")   == Some::<usize>(1024*1024*1024));
+    
+    assert!(parse_memory("6g")      == Some::<usize>(6*1024*1024*1024));
+    assert!(parse_memory("60g")     == Some::<usize>(60*1024*1024*1024));
+    
+    assert!(parse_memory("1p")     == Some::<usize>(1024*1024*1024*1024));    
+}
+
+#[test]
+fn test_parse_mem_fails() -> () {
+    assert!(parse_memory("") == None);
+    assert!(parse_memory("k") == None);
+    assert!(parse_memory("kb") == None);
+    assert!(parse_memory("foo") == None);
+    assert!(parse_memory("not1024m") == None);
+    assert!(parse_memory("-12g") == None);
+    assert!(parse_memory("12x") == None);
+    assert!(parse_memory("7y") == None);
+    assert!(parse_memory("1024x1024") == None);
+    assert!(parse_memory("1024mi") == None);
 }
