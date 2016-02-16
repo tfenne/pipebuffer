@@ -1,8 +1,7 @@
-[![License](http://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Language](http://img.shields.io/badge/language-rust-brightgreen.svg)](http://www.rust-lang.org/)
-
-
 # pipebuffer
+[![Build Status](https://travis-ci.org/tfenne/pipebuffer.svg?branch=master)](https://travis-ci.org/tfenne/pipebuffer)
+[![Language](http://img.shields.io/badge/language-rust-blue.svg)](http://www.rust-lang.org/)
+[![License](https://img.shields.io/badge/license-MIT-A31F34.svg)](LICENSE)
 
 A simple command line program for buffering `stdin`/`stdout` between piped processes when the operating system's pipe buffer is insufficient.  Modern linux limits the buffer between pipes in a pipeline to `64kb`, which can cause bottlenecks when working with processes with "lumpy" IO profiles.
 
