@@ -5,4 +5,4 @@ authors = [ "Tim Fennell <tfenne@tfenne.com>" ]
 
 [dependencies]
 clap = "2"
-regex = "*"
+regex = "0.1"
